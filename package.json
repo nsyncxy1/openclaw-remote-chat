@@ -1,0 +1,92 @@
+{
+  "name": "openclaw-remote-chat",
+  "displayName": "OpenClaw Remote Chat",
+  "description": "Remote chat interface for OpenClaw Gateway via WebSocket",
+  "version": "0.1.0",
+  "publisher": "openclaw",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw-remote-chat"
+  },
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:openclawChat"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "openclaw-remote",
+          "title": "OpenClaw Remote",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "openclaw-remote": [
+        {
+          "type": "webview",
+          "id": "openclawChat",
+          "name": "Chat",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "openclaw.connect",
+        "title": "OpenClaw: Connect to Gateway"
+      },
+      {
+        "command": "openclaw.disconnect",
+        "title": "OpenClaw: Disconnect"
+      },
+      {
+        "command": "openclaw.configure",
+        "title": "OpenClaw: Configure Connection"
+      }
+    ],
+    "configuration": {
+      "title": "OpenClaw Remote",
+      "properties": {
+        "openclaw.gatewayUrl": {
+          "type": "string",
+          "default": "ws://localhost:18789",
+          "description": "OpenClaw Gateway WebSocket URL"
+        },
+        "openclaw.gatewayToken": {
+          "type": "string",
+          "default": "",
+          "description": "Gateway authentication token"
+        },
+        "openclaw.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect on startup"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "@types/vscode": "^1.109.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

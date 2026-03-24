@@ -14,8 +14,9 @@ export class OpenClawClient extends EventEmitter {
     private token: string = '';
     private sessionKey: string = 'main';
     private requestId: number = 0;
-    private pendingRequests: Map<string, any> = new Map();
+    private pendingRequests: Map<string, { resolve: (payload: any) => void; reject: (error: Error) => void }> = new Map();
     private currentResponse: { runId: string; text: string } | null = null;
+    private activeRunId: string | null = null;
 
     async connect(url: string, token: string): Promise<void> {
         this.url = url;
@@ -64,7 +65,7 @@ export class OpenClawClient extends EventEmitter {
     private async sendConnectHandshake(token: string): Promise<void> {
         return new Promise((resolve, reject) => {
             const reqId = `connect-${Date.now()}`;
-            
+
             const connectReq = {
                 type: 'req',
                 id: reqId,
@@ -74,19 +75,24 @@ export class OpenClawClient extends EventEmitter {
                     maxProtocol: 3,
                     client: {
                         id: 'cli',
-                        version: '0.1.0',
+                        version: '0.1.3',
                         platform: 'vscode',
                         mode: 'cli'
                     },
+                    role: 'operator',
+                    scopes: ['operator.read', 'operator.write'],
+                    caps: [],
+                    commands: [],
+                    permissions: {},
                     auth: token ? { token } : undefined,
-                    locale: 'en-US',
-                    userAgent: 'openclaw-vscode/0.1.0'
+                    locale: 'zh-CN',
+                    userAgent: 'openclaw-vscode/0.1.3'
                 }
             };
 
             this.pendingRequests.set(reqId, { resolve, reject });
             this.ws?.send(JSON.stringify(connectReq));
-            
+
             setTimeout(() => {
                 if (this.pendingRequests.has(reqId)) {
                     this.pendingRequests.delete(reqId);
@@ -102,7 +108,7 @@ export class OpenClawClient extends EventEmitter {
             this.ws.close();
             this.ws = null;
         }
-        
+
         this.emit('disconnected');
     }
 
@@ -113,16 +119,30 @@ export class OpenClawClient extends EventEmitter {
         }
 
         const reqId = `msg-${++this.requestId}`;
+        const idempotencyKey = `vscode-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
         const message = {
             type: 'req',
             id: reqId,
-            method: 'agent',
+            method: 'chat.send',
             params: {
-                message: text,
                 sessionKey: this.sessionKey,
-                idempotencyKey: `vscode-${Date.now()}-${Math.random().toString(36).substring(7)}`
+                message: text,
+                idempotencyKey
             }
         };
+
+        this.currentResponse = null;
+        this.activeRunId = null;
+
+        this.pendingRequests.set(reqId, {
+            resolve: (payload: any) => {
+                this.activeRunId = payload?.runId || null;
+                console.log('chat.send ack:', payload);
+            },
+            reject: (error: Error) => {
+                this.emit('error', error);
+            }
+        });
 
         console.log('Sending message:', message);
         this.ws.send(JSON.stringify(message));
@@ -130,8 +150,7 @@ export class OpenClawClient extends EventEmitter {
 
     private handleMessage(message: any): void {
         console.log('Received message:', message);
-        
-        // Handle responses
+
         if (message.type === 'res' && message.id) {
             const pending = this.pendingRequests.get(message.id);
             if (pending) {
@@ -139,20 +158,19 @@ export class OpenClawClient extends EventEmitter {
                 if (message.ok) {
                     pending.resolve(message.payload);
                 } else {
-                    const errorMsg = typeof message.error === 'object' 
-                        ? JSON.stringify(message.error) 
+                    const errorMsg = typeof message.error === 'object'
+                        ? JSON.stringify(message.error)
                         : message.error;
                     pending.reject(new Error(errorMsg || 'Request failed'));
                 }
             }
             return;
         }
-        
-        // Handle events
+
         if (message.type === 'event') {
             switch (message.event) {
                 case 'connect.challenge':
-                    // Ignore challenge (we're not signing)
+                    console.log('Received connect.challenge (not handled by this minimal client)');
                     break;
                 case 'session.message':
                     if (message.payload) {
@@ -164,49 +182,87 @@ export class OpenClawClient extends EventEmitter {
                         });
                     }
                     break;
-                case 'agent':
-                    console.log('Event: agent, payload:', JSON.stringify(message.payload).substring(0, 200));
-                    // Agent streaming events - accumulate text
-                    // Stream can be 'stdout' or 'assistant'
-                    if (message.payload && (message.payload.stream === 'stdout' || message.payload.stream === 'assistant')) {
-                        const data = message.payload.data;
-                        const runId = message.payload.runId;
-                        
-                        console.log('Agent stream:', { stream: message.payload.stream, runId, hasText: !!data?.text, textLength: data?.text?.length });
-                        
-                        if (data && data.text) {
-                            // Accumulate text
-                            if (!this.currentResponse || this.currentResponse.runId !== runId) {
-                                this.currentResponse = { runId, text: data.text };
-                            } else {
-                                this.currentResponse.text = data.text; // Use latest text (already accumulated by Gateway)
-                            }
-                            
-                            // Emit streaming update
-                            this.emit('stream', {
-                                id: runId,
-                                role: 'assistant',
-                                content: this.currentResponse.text,
-                                timestamp: message.payload.ts || Date.now()
-                            });
+                case 'chat': {
+                    const payload = message.payload || {};
+                    const runId = payload.runId || payload.id || this.activeRunId || Date.now().toString();
+                    const data = payload.data || {};
+                    const eventText = data.text || payload.text || '';
+                    const stream = payload.stream;
+
+                    console.log('Event: chat, payload:', JSON.stringify(payload).substring(0, 400));
+
+                    if ((stream === 'assistant' || stream === 'stdout') && eventText) {
+                        if (!this.currentResponse || this.currentResponse.runId !== runId) {
+                            this.currentResponse = { runId, text: eventText };
+                        } else {
+                            this.currentResponse.text = eventText;
                         }
-                    } else if (message.payload && message.payload.stream === 'lifecycle') {
-                        const data = message.payload.data;
-                        const runId = message.payload.runId;
-                        
-                        // When lifecycle ends, emit the complete message
-                        if (data && data.phase === 'end' && this.currentResponse && this.currentResponse.runId === runId) {
-                            console.log('Emitting complete message:', this.currentResponse.text.substring(0, 100));
+
+                        this.emit('stream', {
+                            id: runId,
+                            role: 'assistant',
+                            content: this.currentResponse.text,
+                            timestamp: payload.ts || Date.now()
+                        });
+                        break;
+                    }
+
+                    if (stream === 'lifecycle') {
+                        if (data.phase === 'end' && this.currentResponse && this.currentResponse.runId === runId) {
                             this.emit('message', {
                                 id: runId,
                                 role: 'assistant',
                                 content: this.currentResponse.text,
-                                timestamp: message.payload.ts || Date.now()
+                                timestamp: payload.ts || Date.now()
                             });
                             this.currentResponse = null;
+                            this.activeRunId = null;
                         }
+                        break;
+                    }
+
+                    if (payload.role === 'assistant' && eventText) {
+                        this.emit('message', {
+                            id: runId,
+                            role: 'assistant',
+                            content: eventText,
+                            timestamp: payload.ts || Date.now()
+                        });
                     }
                     break;
+                }
+                case 'agent': {
+                    const payload = message.payload || {};
+                    const data = payload.data || {};
+                    const runId = payload.runId || this.activeRunId || Date.now().toString();
+
+                    console.log('Event: agent, payload:', JSON.stringify(payload).substring(0, 400));
+
+                    if ((payload.stream === 'stdout' || payload.stream === 'assistant') && data.text) {
+                        if (!this.currentResponse || this.currentResponse.runId !== runId) {
+                            this.currentResponse = { runId, text: data.text };
+                        } else {
+                            this.currentResponse.text = data.text;
+                        }
+
+                        this.emit('stream', {
+                            id: runId,
+                            role: 'assistant',
+                            content: this.currentResponse.text,
+                            timestamp: payload.ts || Date.now()
+                        });
+                    } else if (payload.stream === 'lifecycle' && data.phase === 'end' && this.currentResponse && this.currentResponse.runId === runId) {
+                        this.emit('message', {
+                            id: runId,
+                            role: 'assistant',
+                            content: this.currentResponse.text,
+                            timestamp: payload.ts || Date.now()
+                        });
+                        this.currentResponse = null;
+                        this.activeRunId = null;
+                    }
+                    break;
+                }
                 default:
                     console.log('Event:', message.event);
             }

@@ -2,7 +2,7 @@
   "name": "openclaw-remote-chat",
   "displayName": "OpenClaw Remote Chat",
   "description": "Remote chat interface for OpenClaw Gateway via WebSocket",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "openclaw",
   "repository": {
     "type": "git",
@@ -50,6 +50,10 @@
       {
         "command": "openclaw.configure",
         "title": "OpenClaw: Configure Connection"
+      },
+      {
+        "command": "openclaw.resetDeviceIdentity",
+        "title": "OpenClaw: Reset Device Identity"
       }
     ],
     "configuration": {

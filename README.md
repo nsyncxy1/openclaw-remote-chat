@@ -1,6 +1,7 @@
 # OpenClaw Remote Chat
 
 VS Code extension for remote chat with OpenClaw Gateway via WebSocket.
+
 （2026.4.18）vscode插件连接的时候需要在openclaw web页面 的节点  Devices   列表中同意你的设备，然后在vscode插件中重新连接就可以了。。
 
 ## Features
